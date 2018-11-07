@@ -10,8 +10,30 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from collections import defaultdict
+import os 
+import pickle
+import time
+import detok
+
+def save_checkpoint(encoder, decoder, loss_history, checkpoint_dir):
+    '''
+    temporary. we should use testtube
+    '''
+    time_string = time.strftime("%d%m%y-%H%M%S")
+    enc_filename = "{}/enc-{}.pth".format(checkpoint_dir, time_string)
+    dec_filename = "{}/dec-{}.pth".format(checkpoint_dir, time_string)
+    loss_filename = "{}/loss-{}.pkl".format(checkpoint_dir, time_string)
+    torch.save(encoder.state_dict(), enc_filename)
+    torch.save(decoder.state_dict(), dec_filename)
+    with open(loss_filename, 'wb') as handle:
+        pickle.dump(loss_history, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    print("Model saved.")
 
 def run(args):
+    try:
+        os.mkdir(args.savedir)
+    except:
+        pass
     device = torch.device("cuda" if (not args.cpu) and torch.cuda.is_available() else "cpu")
     print("Using device", device)
     
@@ -57,14 +79,16 @@ def run(args):
     # TODO: save/load weights
     # TODO: early stopping
     loss_history = defaultdict(list)
+    save_checkpoint(encoder, decoder, loss_history, args.savedir)
     for i in range(args.epoch):
         if args.test:
             test(args, encoder, decoder, encoder_optimizer, decoder_optimizer, loss_function, device, i, test_data)
         else:
             train_loss, val_loss = train_and_val(args, encoder, decoder, encoder_optimizer, 
-                                                 decoder_optimizer, loss_function, device, i, train_data, val_data)
+                                                 decoder_optimizer, loss_function, device, i, train_data, val_data, trg)
             loss_history["train"].append(train_loss)
             loss_history["val"].append(val_loss)
+            save_checkpoint(encoder, decoder, loss_history, args.savedir)
             if early_stop(loss_history["val"], args.early_stopping):
                 print("Early stopped.")
                 break
@@ -176,7 +200,7 @@ def run_batch(phase, args, encoder, decoder, encoder_optimizer, decoder_optimize
     return loss.item() / number_of_loss_calculation, translation_output
     
     
-def train_and_val(args, encoder, decoder, encoder_optimizer, decoder_optimizer, loss_function, device, epoch_idx, train_data, val_data):
+def train_and_val(args, encoder, decoder, encoder_optimizer, decoder_optimizer, loss_function, device, epoch_idx, train_data, val_data, trg):
     train_iter, val_iter = data.BucketIterator.splits(
         (train_data, val_data), batch_size=args.batch_size
     )
@@ -200,6 +224,7 @@ def train_and_val(args, encoder, decoder, encoder_optimizer, decoder_optimizer, 
     )
 
     # turn on dropout
+    '''
     encoder.train()
     decoder.train()
     
@@ -224,6 +249,9 @@ def train_and_val(args, encoder, decoder, encoder_optimizer, decoder_optimizer, 
         
     print("train done. epoch: {}, average loss for current epoch: {}, numbatch: {}, size of last batch: {}".format(
         epoch_idx, np.mean(train_loss_list), i+1, train_batch.src.shape[1]))
+    '''
+    encoder.load_state_dict(torch.load('../notebooks/myDir/enc-061118-165306.pth'))
+    decoder.load_state_dict(torch.load('../notebooks/myDir/dec-061118-165306.pth'))
     
     # turn off dropout
     encoder.eval()
@@ -243,6 +271,10 @@ def train_and_val(args, encoder, decoder, encoder_optimizer, decoder_optimizer, 
             device
         )
         val_loss_list.append(loss)
+        for j in range(args.batch_size):
+            print(detok.detok(val_batch.trg, trg.vocab.itos))
+            print(detok.detok(translation_output, trg.vocab.itos))
+        break
         if i % args.print_every == 0:
             print("val, epoch: {}, step: {}, average loss for current epoch: {}, batch loss: {}".format(
                 epoch_idx, i, np.mean(val_loss_list), loss))
@@ -279,6 +311,7 @@ def rnn_encoder_decoder_argparser():
     parser.add_argument('--clip', help="clip coefficient in optimizer", type=float,  default=1)
     parser.add_argument('--teacher_forcing', help="probability of performing teacher forcing", type=float,  default=0.5)
     parser.add_argument("--max_sentence_length", help="maximum sentence length", type=int, default=50)
+    parser.add_argument("--savedir", help="Directory where model will be saved", default='myDir')
     return parser
 
 if __name__ == '__main__':
